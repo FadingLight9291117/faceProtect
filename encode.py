@@ -13,21 +13,21 @@ from img2pose.img2pose import img2poseModel
 from img2pose.model_loader import load_model
 from pathlib import Path
 import cv2
-from functools import partial, reduce
-import operator
+import functools
+
+from Face import Faces
 
 np.set_printoptions(suppress=True)
 
 
-def render_plot(img, poses, bboxes, save_path=None):
+def render_plot(img_path, poses, bboxes, save_path=None):
     renderer = Renderer(
         vertices_path="pose_references/vertices_trans.npy",
         triangles_path="pose_references/triangles.npy"
     )
 
+    img = Image.open(img_path)
     (w, h) = img.size
-    origin_img = img.copy()
-    origin_img = np.asarray(origin_img)
 
     # 渲染3D人脸
     trans_vertices = renderer.transform_vertices(img, poses)
@@ -36,50 +36,16 @@ def render_plot(img, poses, bboxes, save_path=None):
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
     # 扩大人脸框
-    expend = partial(expend_bbox, img_size=(w, h))
-    bboxes = [expend(bbox) for bbox in bboxes]
-
-    faces = []
-    for bbox in bboxes:
-        bbox = bbox.astype(np.int32)
-
-        # cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 2)
-
-        data = origin_img[bbox[1]:bbox[3], bbox[0]:bbox[2]]
-        face = {
-            'xmin': bbox[0],
-            'ymin': bbox[1],
-            'xmax': bbox[2],
-            'ymax': bbox[3],
-            'data_length': np.int32(len(data.flatten()[0].tobytes()) * data.size),
-            'rgb_data': data
-        }
-        faces.append(face)
+    expend = functools.partial(expend_bbox, img_size=(w, h))
+    bboxes = [expend(bbox).astype(np.int32) for bbox in bboxes]
 
     cv2.imwrite(save_path, img)
     data_path = Path('result/data') / Path(save_path).name
     data_path = data_path.with_suffix('.dat')
+    data_path.parent.mkdir(exist_ok=True)
 
-    # 验证字节数是否正确
-    # data_length = 5 * 4  * len(faces)
-    # for face in faces:
-    #     data_length += face['data_length']
-    # print(data_length)
-
-    save_face(faces, save_file=str(data_path))
-
-
-def save_face(faces: List[dict], save_file='test.dat'):
-    save_file = Path(save_file)
-    save_file.parent.mkdir(exist_ok=True)
-
-    face_bytes = bytes()
-    for face in faces:
-        data = [value.tobytes() for value in face.values()]
-        face_bytes += reduce(operator.add, data)
-
-    with save_file.open('wb') as f:
-        f.write(face_bytes)
+    faces = Faces.from_img(img_path, bboxes)
+    faces.dump(str(data_path))
 
 
 def expend_bbox(bbox, img_size, expend_factor=0.6):
@@ -108,19 +74,20 @@ def expend_bbox(bbox, img_size, expend_factor=0.6):
 IMAGES_PATH = '/home/clz/dataset/face/face'
 SAVE_PATH = 'result/images_with_mask'
 
-threshold = 0.9
+# model params
+DEPTH = 18
+MAX_SIZE = 1400
+MIN_SIZE = 600
+THREED_POINTS = './pose_references/reference_3d_68_points_trans.npy'
+POSE_MEAN = "models/WIDER_train_pose_mean_v1.npy"
+POSE_STDDEV = "models/WIDER_train_pose_stddev_v1.npy"
+MODEL_PATH = "models/img2pose_v1.pth"
+
+threshold = 0.8
 
 
 def get_model():
     # load model begin.
-    # model params
-    DEPTH = 18
-    MAX_SIZE = 1400
-    MIN_SIZE = 600
-    THREED_POINTS = './pose_references/reference_3d_68_points_trans.npy'
-    POSE_MEAN = "models/WIDER_train_pose_mean_v1.npy"
-    POSE_STDDEV = "models/WIDER_train_pose_stddev_v1.npy"
-    MODEL_PATH = "models/img2pose_v1.pth"
 
     threed_points = np.load(THREED_POINTS)
     pose_mean = np.load(POSE_MEAN)
@@ -137,12 +104,12 @@ def get_model():
     return img2pose_model
 
 
-def save_result(img, poses, bboxes, save_name):
+def save_result(img_path, poses, bboxes, save_name):
     save_path = Path(SAVE_PATH)
     save_path.mkdir(exist_ok=True)
     save_file = save_path / save_name
     save_file = save_file.with_suffix('.jpg')
-    render_plot(img, poses, bboxes, save_path=str(save_file))
+    render_plot(img_path, poses, bboxes, save_path=str(save_file))
 
 
 transform = transforms.Compose([transforms.ToTensor()])
@@ -163,7 +130,7 @@ def predict_one(img_path, model):
             pose_pred = pose_pred.squeeze()
             poses.append(pose_pred)
             bboxes.append(bbox)
-    return img, poses, bboxes
+    return img_path, poses, bboxes
 
 
 def predict():
@@ -180,7 +147,7 @@ def predict():
         img, poses, bboxes = predict_one(img_path, img2pose_model)
 
         image_name = Path(img_path).name
-        save_result(img, poses, bboxes, image_name)
+        save_result(img_path, poses, bboxes, image_name)
 
 
 if __name__ == '__main__':
